@@ -350,7 +350,7 @@ wheels = [
 ]
 
 [[package]]
-name = "plan-grader-mcp-server"
+name = "plan-grader-mcp"
 version = "0.1.0"
 source = { editable = "." }
 dependencies = [
@@ -364,8 +364,8 @@ dev = [
 
 [package.metadata]
 requires-dist = [
-    { name = "mcp", specifier = ">=1.0.0" },
-    { name = "pytest", marker = "extra == 'dev'", specifier = ">=7.0" },
+    { name = "mcp" },
+    { name = "pytest", marker = "extra == 'dev'" },
 ]
 provides-extras = ["dev"]
 
