@@ -2,50 +2,142 @@
 
 ![License](https://img.shields.io/github/license/kevinthelago/plan-grader-mcp-server) ![Last commit](https://img.shields.io/github/last-commit/kevinthelago/plan-grader-mcp-server)
 
-# Plan Grader MCP Server
+An MCP server that grades GitHub project plans, individual issues, and milestones against a structured rubric. Exposes three tools over stdio transport so any MCP-compatible host can drive it.
 
-## Overview
+## Tools
 
-# Plan Grader MCP Server
+### `grade_plan`
 
-## Tech stack
+Grade a complete project plan loaded from disk or passed as direct arrays.
 
-# Stack
+**Signature**
+```
+grade_plan(
+    plan_dir: str = ".",
+    issues: list | None = None,
+    phases: list | None = None,
+    repos: list | None = None,
+) -> PlanGrade
+```
 
-One repo, one language. Choices are dictated by the host's drop-in conventions (match the sibling first-party servers exactly) — not open design decisions.
+Reads `issues.json`, `phases.json`, and `repos.json` from `plan_dir` by default. Pass the `issues`/`phases`/`repos` arrays directly to skip file I/O.
 
-| Layer | Choice | Notes / justification |
+**Returns** `PlanGrade` — JSON-serializable object with:
+```json
+{
+  "score": 0.82,
+  "letter": "B",
+  "reasons": [],
+  "repoGrades": [...],
+  "categories": [
+    {"id": "acceptance", "label": "Acceptance criteria", "score": 0.9, "letter": "A", "weight": 0.35, "detail": "...", "examples": []},
+    {"id": "ownership",  "label": "Ownership",           "score": 0.8, "letter": "B", "weight": 0.20, ...},
+    {"id": "milestones", "label": "Milestones",          "score": 0.7, "letter": "C", "weight": 0.20, ...},
+    {"id": "streams",    "label": "Streams",             "score": 1.0, "letter": "A", "weight": 0.15, ...},
+    {"id": "titles",     "label": "Titles",              "score": 1.0, "letter": "A", "weight": 0.10, ...},
+    {"id": "granularity","label": "Granularity",         "score": 0.6, "letter": "D", "weight": 0.0,  ...}
+  ],
+  "suggestions": [
+    {"priority": "high", "title": "3 issue(s): add acceptance criteria", "detail": "..."}
+  ]
+}
+```
+
+---
+
+### `grade_issue`
+
+Grade a single GitHub issue against the per-issue rubric.
+
+**Signature**
+```
+grade_issue(issue: dict) -> IssueGrade
+```
+
+`issue` is a raw issue dict (e.g. from the GitHub API). Optional fields are tolerated.
+
+**Returns**
+```json
+{
+  "ref": "#42",
+  "score": 0.75,
+  "letter": "B",
+  "reasons": ["only 1 acceptance criterion (aim for >=2)"]
+}
+```
+
+Scoring bands: A ≥ 0.90 · B ≥ 0.75 · C ≥ 0.60 · D ≥ 0.45 · F below 0.45.
+
+Weighted dimensions (sum to 1.0):
+| Dimension | Weight | Passes when… |
 |---|---|---|
-| **Language** | Python ≥ 3.10 | Matches sibling first-party servers. `match`/union types/`list[str]` generics want ≥3.10; keep the floor there unless the `mcp` SDK forces higher. |
-| **Build front-end / packaging** | **uv**, invoked as `python -m uv` | The host builds the clone with **`python -m uv sync`** and launches with **`python -m uv run --directory {dir} plan-grader-mcp`**. Never a bare `uv` — its console-script shim is often not on PATH on a fresh machine. `pyproject.toml` must build clean from a clean checkout under `python -m uv sync`. |
-| **Build backend** | Hatchling (`hatchling.build`) | Standard PEP 517 backend for a `src/`-layout package; uv works with it out of the box. (Agent decides; default = hatchling.) |
-| **Project layout** | `src/` layout — `src/plan_grader/` | Package import name `plan_grader`; console-script `plan-grader-mcp = "plan_grader.server:main"`. |
-| **MCP framework** | Official `mcp` Python SDK — `FastMCP` | `FastMCP("plan-grader")` registers the three tools; `main()` runs `mcp.run()` over **stdio**. |
-| **Transport** | MCP **stdio** | The only transport. No HTTP/SSE. |
-| **Testing** | **pytest** | Run as `python -m uv run pytest`. Parity fixtures live in `tests/`. |
-| **Runtime deps** | `mcp` (the SDK) only | The grade path is pure stdlib (`json`, `re`, `dataclasses`, `statistics`/manual mean). No network/HTTP/clock/random libraries — forbidden by the determinism rule. |
-| **Determinism** | stdlib only in `grade.py` | No `datetime.now`, no `random`, no I/O beyond reading the three JSON files in the server layer. Same inputs → byte-identical output. |
+| acceptance | 0.35 | ≥ 2 acceptance criteria |
+| ownership | 0.20 | `owns` field lists ≥ 1 file/glob |
+| milestones | 0.20 | issue is assigned to a milestone/phase |
+| streams | 0.15 | issue has an owning stream |
+| titles | 0.10 | stripped title is ≥ 10 characters |
 
-## Toolchain commands (build / test / run)
+---
 
-- Build/sync: `python -m uv sync`
-- Run server: `python -m uv run plan-grader-mcp`
-- Tests: `python -m uv run pytest`
+### `lint_plan`
 
-These will be registered in `commands.json` (project + repo scope) so build/triage sessions don't block on permission prompts. `python` and `pytest`/`uv` invocations all go through `python -m uv run`, so the allowed binary is **`python`**.
+Scan a set of plan files for unresolved placeholders and empty content.
 
-## Open defaults (agent decides)
+**Signature**
+```
+lint_plan(files: dict[str, str]) -> LintResult
+```
 
-- **Python version floor** — default **3.10**; bump only if the pinned `mcp` SDK requires it.
-- **Build backend** — default **hatchling**; any PEP 517 backend that builds the `src/` layout under `python -m uv sync` is acceptable.
-- **`mcp` SDK version** — pin a recent stable `mcp` release that exposes `FastMCP`; agent picks the version at build time.
+`files` maps filename → file content (strings). An empty map returns no gaps.
 
-## Getting started
+**Returns**
+```json
+{
+  "gaps": ["README.md: unresolved placeholder", "ROADMAP.md: empty"],
+  "blocked": true
+}
+```
+
+Detected patterns: `TODO`, `TBD`, `FIXME`, `XXX`, `TKTK`, `placeholder` (case-insensitive), and `…` / `...` (but not `....`).
+
+---
+
+## Install
+
+Downloads to `~/.base-studio-code/mcp/plan-grader-mcp-server`, then builds with `python -m uv sync`.
+
+After cloning:
 
 ```bash
-git clone https://github.com/kevinthelago/plan-grader-mcp-server.git
-cd plan-grader-mcp-server
-# install dependencies and run the project's build/test/dev commands
+cd ~/.base-studio-code/mcp/plan-grader-mcp-server
+python -m uv sync
+```
+
+Add to your MCP host config:
+
+```json
+{
+  "mcpServers": {
+    "plan-grader": {
+      "command": "python",
+      "args": ["-m", "uv", "run", "--directory", "/path/to/plan-grader-mcp-server", "plan-grader-mcp"]
+    }
+  }
+}
+```
+
+## Local run
+
+```bash
+python -m uv run plan-grader-mcp
+```
+
+The server speaks MCP over stdio and stays running until the host closes the connection.
+
+## Tests
+
+```bash
+python -m uv run pytest
 ```
 
 ## Contributing
@@ -55,7 +147,3 @@ See [CONTRIBUTING.md](CONTRIBUTING.md) and our [Code of Conduct](CODE_OF_CONDUCT
 ## License
 
 See [LICENSE](LICENSE).
-
----
-
-_Scaffolded by base-studio-code._
