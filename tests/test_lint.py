@@ -1,170 +1,193 @@
-"""Tests for plan linting (structural gap detection)."""
+"""Parity tests for find_plan_gaps and the lint_plan / lint_stage MCP tools."""
 
 from __future__ import annotations
 
-import json
+import os
 
 import pytest
 
-from plan_grader.lint import LintIssue, Severity, lint_plan
-from plan_grader.tools.lint_plan import lint_plan as lint_plan_tool
+from plan_grader.lint import find_plan_gaps
+from plan_grader.tools.lint_plan import lint_plan, lint_stage
 
 
 # ---------------------------------------------------------------------------
-# Helpers
+# find_plan_gaps — pure logic
 # ---------------------------------------------------------------------------
 
-def _minimal_valid_plan() -> dict:
-    return {
-        "goal": "Deliver a fast, reliable search feature for the product catalogue.",
-        "approach": "Implement an Elasticsearch-backed service with REST API and caching.",
-        "risks": ["Elasticsearch cluster may be unavailable during peak load"],
-        "testing": "Unit tests for indexing logic; integration tests against a local ES container.",
-        "phases": ["Discovery & spike", "Implementation", "QA & hardening"],
-        "acceptance_criteria": ["Search returns results in < 200 ms at p99"],
-    }
+class TestEmptyFileMap:
+    def test_empty_map_returns_no_gaps(self):
+        result = find_plan_gaps({})
+        assert result == {"gaps": [], "blocked": False}
 
 
-def _errors(issues: list[LintIssue]) -> list[LintIssue]:
-    return [i for i in issues if i.severity == Severity.ERROR]
+class TestEmptyContent:
+    def test_empty_string_is_gap(self):
+        result = find_plan_gaps({"context/goal.md": ""})
+        assert result["gaps"] == ["context/goal.md: empty"]
+        assert result["blocked"] is True
+
+    def test_whitespace_only_is_gap(self):
+        result = find_plan_gaps({"context/goal.md": "   \n\t  "})
+        assert result["gaps"] == ["context/goal.md: empty"]
+
+    def test_empty_takes_precedence_over_placeholder(self):
+        # A whitespace-only file that happens to contain "TODO" after strip
+        # would be empty — but that's impossible. Confirm empty check runs first
+        # by using a file that is purely whitespace.
+        result = find_plan_gaps({"f.md": "  "})
+        assert result["gaps"] == ["f.md: empty"]
 
 
-def _warnings(issues: list[LintIssue]) -> list[LintIssue]:
-    return [i for i in issues if i.severity == Severity.WARNING]
+class TestPlaceholderKeywords:
+    @pytest.mark.parametrize("keyword", ["TODO", "TBD", "FIXME", "XXX", "TKTK", "placeholder"])
+    def test_keyword_detected(self, keyword):
+        result = find_plan_gaps({"f.md": f"The goal is {keyword} — fill in later."})
+        assert result["gaps"] == ["f.md: unresolved placeholder"]
+        assert result["blocked"] is True
+
+    @pytest.mark.parametrize("keyword", ["todo", "tbd", "fixme", "xxx", "tktk", "Placeholder"])
+    def test_keyword_case_insensitive(self, keyword):
+        result = find_plan_gaps({"f.md": f"Some {keyword} here."})
+        assert result["gaps"] == ["f.md: unresolved placeholder"]
+
+    def test_word_boundary_required(self):
+        # "TODOS" should not match because \b requires a word boundary after TODO
+        result = find_plan_gaps({"f.md": "TODOS and TODOS."})
+        assert result["gaps"] == []
+        assert result["blocked"] is False
+
+
+class TestEllipsis:
+    def test_three_dots_is_placeholder(self):
+        result = find_plan_gaps({"f.md": "The approach is ... to be determined."})
+        assert result["gaps"] == ["f.md: unresolved placeholder"]
+
+    def test_four_dots_triggers_because_last_three_match(self):
+        # re.search finds "..." at position 1 within "....", where no 4th dot follows.
+        # The lookahead (?!\.) only prevents the match starting at position 0 (followed
+        # by a dot), not the match starting at position 1 (last three dots, end of run).
+        result = find_plan_gaps({"f.md": "A sentence ending...."})
+        assert result["gaps"] == ["f.md: unresolved placeholder"]
+
+    def test_five_dots_triggers_same_way(self):
+        # Same reasoning: the last three dots in "....." are not followed by a 4th.
+        result = find_plan_gaps({"f.md": "Many dots....."})
+        assert result["gaps"] == ["f.md: unresolved placeholder"]
+
+    def test_unicode_ellipsis_is_placeholder(self):
+        result = find_plan_gaps({"f.md": "The scope is… undetermined."})
+        assert result["gaps"] == ["f.md: unresolved placeholder"]
+
+    def test_three_dots_at_end_of_string(self):
+        result = find_plan_gaps({"f.md": "Work in progress..."})
+        assert result["gaps"] == ["f.md: unresolved placeholder"]
+
+    def test_three_dots_followed_by_space(self):
+        result = find_plan_gaps({"f.md": "Something... else"})
+        assert result["gaps"] == ["f.md: unresolved placeholder"]
+
+
+class TestCleanContent:
+    def test_non_empty_placeholder_free_yields_no_gap(self):
+        result = find_plan_gaps({"context/goal.md": "Deliver a reliable search feature."})
+        assert result == {"gaps": [], "blocked": False}
+
+    def test_multiple_clean_files_no_gaps(self):
+        files = {
+            "context/goal.md": "Ship the search feature by Q3.",
+            "context/scope.md": "Backend only; no UI changes in scope.",
+        }
+        result = find_plan_gaps(files)
+        assert result == {"gaps": [], "blocked": False}
+
+
+class TestMultipleFiles:
+    def test_gaps_reported_in_insertion_order(self):
+        files = {
+            "a.md": "",
+            "b.md": "clean content here",
+            "c.md": "TODO finish this",
+        }
+        result = find_plan_gaps(files)
+        assert result["gaps"] == ["a.md: empty", "c.md: unresolved placeholder"]
+        assert result["blocked"] is True
+
+    def test_first_clean_then_gap(self):
+        files = {
+            "good.md": "This is fine.",
+            "bad.md": "TBD",
+        }
+        result = find_plan_gaps(files)
+        assert result["gaps"] == ["bad.md: unresolved placeholder"]
+
+    def test_blocked_false_when_all_clean(self):
+        files = {"a.md": "ok", "b.md": "also ok"}
+        assert find_plan_gaps(files)["blocked"] is False
+
+    def test_blocked_true_when_any_gap(self):
+        files = {"a.md": "ok", "b.md": ""}
+        assert find_plan_gaps(files)["blocked"] is True
 
 
 # ---------------------------------------------------------------------------
-# lint_plan (core logic)
-# ---------------------------------------------------------------------------
-
-class TestLintPlanNoIssues:
-    def test_valid_plan_returns_empty(self):
-        issues = lint_plan(_minimal_valid_plan())
-        assert issues == []
-
-
-class TestRequiredFields:
-    def test_missing_goal_is_error(self):
-        plan = _minimal_valid_plan()
-        del plan["goal"]
-        issues = _errors(lint_plan(plan))
-        assert any(i.field == "goal" for i in issues)
-
-    def test_missing_approach_is_error(self):
-        plan = _minimal_valid_plan()
-        del plan["approach"]
-        issues = _errors(lint_plan(plan))
-        assert any(i.field == "approach" for i in issues)
-
-    def test_empty_string_goal_is_error(self):
-        plan = _minimal_valid_plan()
-        plan["goal"] = ""
-        issues = _errors(lint_plan(plan))
-        assert any(i.field == "goal" for i in issues)
-
-    def test_whitespace_only_goal_is_error(self):
-        plan = _minimal_valid_plan()
-        plan["goal"] = "   "
-        issues = _errors(lint_plan(plan))
-        assert any(i.field == "goal" for i in issues)
-
-    def test_none_approach_is_error(self):
-        plan = _minimal_valid_plan()
-        plan["approach"] = None
-        issues = _errors(lint_plan(plan))
-        assert any(i.field == "approach" for i in issues)
-
-    def test_short_goal_is_warning_not_error(self):
-        plan = _minimal_valid_plan()
-        plan["goal"] = "Fix bug"  # < 20 chars
-        issues = lint_plan(plan)
-        error_fields = {i.field for i in _errors(issues)}
-        warning_fields = {i.field for i in _warnings(issues)}
-        assert "goal" not in error_fields
-        assert "goal" in warning_fields
-
-
-class TestRecommendedFields:
-    @pytest.mark.parametrize("field", ["risks", "testing", "phases", "acceptance_criteria"])
-    def test_missing_recommended_field_is_warning(self, field):
-        plan = _minimal_valid_plan()
-        del plan[field]
-        issues = _warnings(lint_plan(plan))
-        assert any(i.field == field for i in issues)
-
-    @pytest.mark.parametrize("field", ["risks", "testing", "phases", "acceptance_criteria"])
-    def test_empty_recommended_field_is_warning(self, field):
-        plan = _minimal_valid_plan()
-        plan[field] = [] if isinstance(plan[field], list) else ""
-        issues = _warnings(lint_plan(plan))
-        assert any(i.field == field for i in issues)
-
-    @pytest.mark.parametrize("field", ["risks", "testing", "phases", "acceptance_criteria"])
-    def test_missing_recommended_field_not_an_error(self, field):
-        plan = _minimal_valid_plan()
-        del plan[field]
-        assert not _errors(lint_plan(plan))
-
-
-class TestIssueOrdering:
-    def test_errors_before_warnings(self):
-        plan = _minimal_valid_plan()
-        del plan["goal"]  # error
-        del plan["risks"]  # warning
-        issues = lint_plan(plan)
-        severities = [i.severity for i in issues]
-        error_idx = severities.index(Severity.ERROR)
-        warning_idx = severities.index(Severity.WARNING)
-        assert error_idx < warning_idx
-
-
-class TestExtraFieldsIgnored:
-    def test_unknown_fields_produce_no_issues(self):
-        plan = _minimal_valid_plan()
-        plan["custom_section"] = "some content"
-        plan["metadata"] = {"author": "Alice"}
-        assert lint_plan(plan) == []
-
-
-# ---------------------------------------------------------------------------
-# lint_plan_tool (MCP wrapper)
+# lint_plan MCP tool
 # ---------------------------------------------------------------------------
 
 class TestLintPlanTool:
-    def test_valid_plan_json_returns_empty_list(self):
-        result = lint_plan_tool(json.dumps(_minimal_valid_plan()))
-        parsed = json.loads(result)
-        assert parsed == []
+    def test_clean_files_return_no_gaps(self):
+        result = lint_plan({"goal.md": "Ship the search feature."})
+        assert result == {"gaps": [], "blocked": False}
 
-    def test_returns_json_string(self):
-        result = lint_plan_tool(json.dumps(_minimal_valid_plan()))
-        assert isinstance(result, str)
-        json.loads(result)  # must parse without error
+    def test_empty_file_returns_gap(self):
+        result = lint_plan({"goal.md": ""})
+        assert result["gaps"] == ["goal.md: empty"]
+        assert result["blocked"] is True
 
-    def test_missing_required_field_appears_in_output(self):
-        plan = _minimal_valid_plan()
-        del plan["goal"]
-        result = json.loads(lint_plan_tool(json.dumps(plan)))
-        assert any(i["field"] == "goal" and i["severity"] == "error" for i in result)
+    def test_placeholder_returns_gap(self):
+        result = lint_plan({"scope.md": "FIXME: define scope"})
+        assert result["gaps"] == ["scope.md: unresolved placeholder"]
 
-    def test_issue_has_required_keys(self):
-        plan = _minimal_valid_plan()
-        del plan["goal"]
-        result = json.loads(lint_plan_tool(json.dumps(plan)))
-        assert len(result) > 0
-        issue = result[0]
-        assert "severity" in issue
-        assert "field" in issue
-        assert "message" in issue
+    def test_empty_map_returns_no_gaps(self):
+        result = lint_plan({})
+        assert result == {"gaps": [], "blocked": False}
 
-    def test_invalid_json_raises_value_error(self):
-        with pytest.raises(ValueError, match="valid JSON"):
-            lint_plan_tool("not json")
+    def test_result_has_required_keys(self):
+        result = lint_plan({"f.md": "some content"})
+        assert "gaps" in result
+        assert "blocked" in result
 
-    def test_json_array_raises_value_error(self):
-        with pytest.raises(ValueError, match="JSON object"):
-            lint_plan_tool(json.dumps(["a", "b"]))
 
-    def test_json_string_raises_value_error(self):
-        with pytest.raises(ValueError, match="JSON object"):
-            lint_plan_tool(json.dumps("just a string"))
+# ---------------------------------------------------------------------------
+# lint_stage MCP tool
+# ---------------------------------------------------------------------------
+
+class TestLintStageTool:
+    def test_reads_file_from_disk(self, tmp_path):
+        (tmp_path / "goal.md").write_text("Ship a fast search feature.", encoding="utf-8")
+        result = lint_stage(str(tmp_path), ["goal.md"])
+        assert result == {"gaps": [], "blocked": False}
+
+    def test_missing_file_surfaces_as_empty_gap(self, tmp_path):
+        result = lint_stage(str(tmp_path), ["nonexistent.md"])
+        assert result["gaps"] == ["nonexistent.md: empty"]
+        assert result["blocked"] is True
+
+    def test_placeholder_in_file_surfaces_as_gap(self, tmp_path):
+        (tmp_path / "scope.md").write_text("TBD — ask product.", encoding="utf-8")
+        result = lint_stage(str(tmp_path), ["scope.md"])
+        assert result["gaps"] == ["scope.md: unresolved placeholder"]
+
+    def test_empty_file_on_disk_surfaces_as_gap(self, tmp_path):
+        (tmp_path / "empty.md").write_text("", encoding="utf-8")
+        result = lint_stage(str(tmp_path), ["empty.md"])
+        assert result["gaps"] == ["empty.md: empty"]
+
+    def test_mixed_files(self, tmp_path):
+        (tmp_path / "goal.md").write_text("Clear goal.", encoding="utf-8")
+        (tmp_path / "scope.md").write_text("", encoding="utf-8")
+        result = lint_stage(str(tmp_path), ["goal.md", "scope.md"])
+        assert result["gaps"] == ["scope.md: empty"]
+
+    def test_empty_file_list_returns_no_gaps(self, tmp_path):
+        result = lint_stage(str(tmp_path), [])
+        assert result == {"gaps": [], "blocked": False}

@@ -1,44 +1,49 @@
-"""MCP tool: lint_plan — report structural gaps in a plan document."""
+"""MCP tools: lint_plan and lint_stage — detect gaps in plan section files."""
 
 from __future__ import annotations
 
-import json
-from typing import Any
+import os
 
-from plan_grader.lint import LintIssue, lint_plan as _lint_plan
-
-
-def _issue_to_dict(issue: LintIssue) -> dict[str, str]:
-    return {
-        "severity": issue.severity.value,
-        "field": issue.field,
-        "message": issue.message,
-    }
+from plan_grader.app import mcp
+from plan_grader.lint import find_plan_gaps
 
 
-def lint_plan(plan: str) -> str:
-    """Check a plan document for structural gaps.
+@mcp.tool()
+def lint_plan(files: dict[str, str]) -> dict:
+    """Check plan section files for empty content or unresolved placeholders.
 
     Args:
-        plan: JSON-encoded plan document.  Expected top-level keys include
-            ``goal``, ``approach``, ``risks``, ``testing``, ``phases``, and
-            ``acceptance_criteria``.
+        files: Mapping of filename to file content (e.g.
+            ``{"context/goal.md": "...", "context/scope.md": "..."}``).
+            Any filenames are accepted; the caller decides the set.
 
     Returns:
-        JSON-encoded list of objects, each with ``severity`` ("error" or
-        "warning"), ``field``, and ``message`` keys.  An empty list means
-        no gaps were detected.
-
-    Raises:
-        ValueError: If *plan* is not valid JSON or is not a JSON object.
+        ``{"gaps": list[str], "blocked": bool}``.  Each gap is
+        ``"{filename}: empty"`` or ``"{filename}: unresolved placeholder"``.
+        ``blocked`` is ``True`` when at least one gap exists.
     """
-    try:
-        parsed: Any = json.loads(plan)
-    except json.JSONDecodeError as exc:
-        raise ValueError(f"plan must be valid JSON: {exc}") from exc
+    return find_plan_gaps(files)
 
-    if not isinstance(parsed, dict):
-        raise ValueError("plan must be a JSON object, not a primitive or array")
 
-    issues = _lint_plan(parsed)
-    return json.dumps([_issue_to_dict(i) for i in issues])
+@mcp.tool()
+def lint_stage(plan_dir: str, files: list[str]) -> dict:
+    """Read named files from *plan_dir* and lint them for gaps.
+
+    Args:
+        plan_dir: Directory that contains the plan files.
+        files: Names of files to read relative to *plan_dir*.
+            A file that cannot be read is treated as empty and surfaces as a
+            ``"{file}: empty"`` gap.
+
+    Returns:
+        Same shape as :func:`lint_plan`.
+    """
+    content_map: dict[str, str] = {}
+    for name in files:
+        path = os.path.join(plan_dir, name)
+        try:
+            with open(path, encoding="utf-8") as fh:
+                content_map[name] = fh.read()
+        except OSError:
+            content_map[name] = ""
+    return find_plan_gaps(content_map)
