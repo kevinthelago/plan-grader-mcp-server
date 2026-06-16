@@ -1,0 +1,38 @@
+[
+  {
+    "ref": "I1",
+    "title": "Implement feature alpha",
+    "acceptance": ["feature works end-to-end", "unit tests pass"],
+    "owns": ["src/alpha.py"],
+    "phase": "Phase 1",
+    "stream": "stream-a",
+    "repo": "repo-a"
+  },
+  {
+    "ref": "I2",
+    "title": "Write tests for alpha feature",
+    "acceptance": ["all tests pass", "coverage >=80%"],
+    "owns": ["tests/test_alpha.py"],
+    "phase": "Phase 1",
+    "stream": "stream-a",
+    "repo": "repo-a"
+  },
+  {
+    "ref": "I3",
+    "title": "I3",
+    "acceptance": [],
+    "owns": [],
+    "phase": null,
+    "stream": null,
+    "repo": "repo-a"
+  },
+  {
+    "ref": "I4",
+    "title": "I4",
+    "acceptance": [],
+    "owns": [],
+    "phase": null,
+    "stream": null,
+    "repo": "repo-a"
+  }
+]
