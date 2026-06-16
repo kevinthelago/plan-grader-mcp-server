@@ -75,8 +75,15 @@ def _dim_pass(issue: dict[str, Any], dim_id: str) -> bool:
     return False
 
 
+def _repo_name(repo: Any) -> str:
+    """Normalise a repo entry to its string identifier (supports str or dict)."""
+    if isinstance(repo, str):
+        return repo
+    return repo.get("name", "") if repo else ""
+
+
 def grade_issue(issue: dict[str, Any]) -> dict[str, Any]:
-    ref = issue.get("ref", "")
+    ref = issue.get("ref")  # None when absent — do not default to ""
     score = 0.0
     reasons: list[str] = []
 
@@ -160,11 +167,11 @@ def grade_milestone(issues: list[dict[str, Any]], name: str = "") -> dict[str, A
 
 def grade_repo(
     issues: list[dict[str, Any]],
-    repos: list[dict[str, Any]],
+    repos: list[Any],
     phases: list[dict[str, Any]],
     repo_ref: str = "",
 ) -> dict[str, Any]:
-    first_repo = repos[0].get("name", "") if repos else ""
+    first_repo = _repo_name(repos[0]) if repos else ""
     effective_ref = repo_ref or first_repo
 
     repo_issues = [
@@ -183,17 +190,21 @@ def grade_repo(
         }
 
     # Build phase lookup: name -> canonical name, "1-based-index" -> canonical name
+    # Phases may be dicts with "name" or plain strings.
     phase_map: dict[str, str] = {}
     for idx, p in enumerate(phases, 1):
-        pname = p.get("name", "")
+        pname = p.get("name", "") if isinstance(p, dict) else str(p)
         phase_map[pname] = pname
         phase_map[str(idx)] = pname
 
     groups: dict[str, list[dict[str, Any]]] = {}
     unscheduled: list[dict[str, Any]] = []
     for issue in repo_issues:
-        raw_phase = issue.get("phase") or ""
-        norm = phase_map.get(raw_phase) if raw_phase else None
+        raw_phase = issue.get("phase")
+        if raw_phase:
+            norm = phase_map.get(str(raw_phase))
+        else:
+            norm = None
         if norm:
             groups.setdefault(norm, []).append(issue)
         else:
@@ -345,8 +356,8 @@ def _build_suggestions(
 
 def grade_plan(
     issues: list[dict[str, Any]],
-    phases: list[dict[str, Any]],
-    repos: list[dict[str, Any]],
+    phases: list[Any],
+    repos: list[Any],
 ) -> dict[str, Any]:
     _empty: dict[str, Any] = {
         "score": 0.0,
@@ -363,8 +374,8 @@ def grade_plan(
     if not repos:
         return {**_empty, "reasons": ["no repos linked"]}
 
-    first_repo = repos[0].get("name", "")
-    repo_names = {r.get("name", "") for r in repos}
+    first_repo = _repo_name(repos[0])
+    repo_names = {_repo_name(r) for r in repos}
 
     reasons: list[str] = []
     unlinked = [i for i in issues if (i.get("repo") or first_repo) not in repo_names]
@@ -372,7 +383,7 @@ def grade_plan(
         reasons.append(f"{len(unlinked)} issue(s) reference an unlinked repo")
 
     repo_grades = [
-        grade_repo(issues, repos, phases, repo.get("name", ""))
+        grade_repo(issues, repos, phases, _repo_name(repo))
         for repo in repos
     ]
 
