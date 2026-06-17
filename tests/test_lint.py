@@ -62,17 +62,15 @@ class TestEllipsis:
         result = find_plan_gaps({"f.md": "The approach is ... to be determined."})
         assert result["gaps"] == ["f.md: unresolved placeholder"]
 
-    def test_four_dots_triggers_because_last_three_match(self):
-        # re.search finds "..." at position 1 within "....", where no 4th dot follows.
-        # The lookahead (?!\.) only prevents the match starting at position 0 (followed
-        # by a dot), not the match starting at position 1 (last three dots, end of run).
+    def test_four_dots_no_match(self):
         result = find_plan_gaps({"f.md": "A sentence ending...."})
-        assert result["gaps"] == ["f.md: unresolved placeholder"]
+        assert result["gaps"] == []
+        assert result["blocked"] is False
 
-    def test_five_dots_triggers_same_way(self):
-        # Same reasoning: the last three dots in "....." are not followed by a 4th.
+    def test_five_dots_no_match(self):
         result = find_plan_gaps({"f.md": "Many dots....."})
-        assert result["gaps"] == ["f.md: unresolved placeholder"]
+        assert result["gaps"] == []
+        assert result["blocked"] is False
 
     def test_unicode_ellipsis_is_placeholder(self):
         result = find_plan_gaps({"f.md": "The scope is… undetermined."})
