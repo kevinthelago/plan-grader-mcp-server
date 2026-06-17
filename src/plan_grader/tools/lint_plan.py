@@ -25,7 +25,6 @@ def lint_plan(files: dict[str, str]) -> dict:
     return find_plan_gaps(files)
 
 
-@mcp.tool()
 def lint_stage(plan_dir: str, files: list[str]) -> dict:
     """Read named files from *plan_dir* and lint them for gaps.
 
