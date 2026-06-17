@@ -1,0 +1,38 @@
+[
+  {
+    "ref": "A1",
+    "title": "Implement feature alpha",
+    "acceptance": ["feature works end-to-end", "unit tests pass"],
+    "owns": ["src/alpha.py"],
+    "phase": "Phase 1",
+    "stream": "stream-a",
+    "repo": "repo-a"
+  },
+  {
+    "ref": "A2",
+    "title": "Write tests for alpha feature",
+    "acceptance": ["all tests pass", "coverage >=80%"],
+    "owns": ["tests/test_alpha.py"],
+    "phase": "Phase 1",
+    "stream": "stream-a",
+    "repo": "repo-a"
+  },
+  {
+    "ref": "B1",
+    "title": "Implement feature beta",
+    "acceptance": ["unit tests pass", "integration tests pass"],
+    "owns": ["src/beta.py"],
+    "phase": "Phase 2",
+    "stream": "stream-b",
+    "repo": "repo-b"
+  },
+  {
+    "ref": "B2",
+    "title": "Write tests for beta feature",
+    "acceptance": ["all tests pass", "coverage >=90%"],
+    "owns": ["tests/test_beta.py"],
+    "phase": "Phase 2",
+    "stream": "stream-b",
+    "repo": "repo-b"
+  }
+]
