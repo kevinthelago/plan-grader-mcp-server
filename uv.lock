@@ -364,7 +364,7 @@ dev = [
 
 [package.metadata]
 requires-dist = [
-    { name = "mcp" },
+    { name = "mcp", specifier = ">=1.0.0" },
     { name = "pytest", marker = "extra == 'dev'" },
 ]
 provides-extras = ["dev"]
