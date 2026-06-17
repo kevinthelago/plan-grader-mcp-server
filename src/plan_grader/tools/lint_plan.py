@@ -5,7 +5,7 @@ from __future__ import annotations
 import os
 
 from plan_grader.app import mcp
-from plan_grader.lint import find_plan_gaps
+from plan_grader.grade import find_plan_gaps
 
 
 @mcp.tool()
